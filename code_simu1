@@ -1,314 +1,94 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.signal import find_peaks
-import time
-import warnings
-warnings.filterwarnings("ignore")
-plt.rcParams.update({'figure.dpi':120,'font.size':10})
-# Paramètres du spectre global
-# Ces paramètres définissent la grille spectrale et le spectre
-# La grille spectrale est une série de longueurs d'onde uniformément espacées.
-n_lambda = 1000 # Nombre de points dans la grille spectrale
-lambda_min_nm = 400.0 # Longueur d'onde minimale en nm
-lambda_max_nm = 700.0 # Longueur d'onde maximale en nm
-lambdas_nm = np.linspace(lambda_min_nm, lambda_max_nm, n_lambda) # Grille de longueurs d'onde en nm
-lambdas_m = lambdas_nm * 1e-9 # Conversion en mètres pour les calculs physiques
-# Spectre de test (lignes étroites de type hydrogène)
-# Ce spectre idéal simule des pics gaussiens étroits représentant des lignes spectrales.
-element_lines_nm = [410.2, 434.0, 486.1, 656.3] # Positions des lignes spectrales en nm
-S_ideal = np.ones(n_lambda) * 0.1 # Fond continu faible
-for line in element_lines_nm:
-    sigma_nm = 0.2 # Largeur du pic gaussien en nm
-    S_ideal += 10.0 * np.exp(-0.5 * ((lambdas_nm - line) / sigma_nm)**2) # Ajout des pics gaussiens
-# Fonction de conversion longueur d'onde vers RGB
-# Cette fonction mappe une longueur d'onde visible à une couleur RGB approximative pour la visualisation.
-def wavelength_to_rgb(wl_nm):
-    wl = wl_nm
-    if wl < 380 or wl > 780: return np.array([0,0,0]) # Hors du visible : noir
-    if wl < 440: r,g,b = -(wl-440)/(440-380),0,1 # Violet à bleu
-    elif wl < 490: r,g,b = 0,(wl-440)/(490-440),1 # Bleu à cyan
-    elif wl < 510: r,g,b = 0,1,-(wl-510)/(510-490) # Cyan à vert
-    elif wl < 580: r,g,b = (wl-510)/(580-510),1,0 # Vert à jaune
-    elif wl < 645: r,g,b = 1,-(wl-645)/(645-580),0 # Jaune à rouge
-    else: r,g,b = 1,0,0 # Rouge
-    factor = 1.0 # Facteur d'atténuation pour les extrémités du spectre visible
-    if wl < 420: factor = 0.3 + 0.7*(wl-380)/(420-380)
-    elif wl > 700: factor = 0.3 + 0.7*(780-wl)/(780-700)
-    return np.clip(np.array([r,g,b])*factor,0,1)**0.8 # Gamma correction pour une meilleure perception
-RGB_lambda = np.array([wavelength_to_rgb(w) for w in lambdas_nm]) # Tableau RGB pour chaque longueur d'onde
-# Paramètres par défaut de l'instrument
-# Ces valeurs représentent les caractéristiques d'un spectromètre.
-DEFAULTS = {
-    'f1': 0.100, # Distance focale de la lentille d'entrée (m)
-    'f2': 0.100, # Distance focale de la lentille de sortie (m)
-    'L_m': 5e-3, # Diamètre d'illumination (m)
-    'lines_per_mm': 600, # Nombre de traits par mm sur le réseau de diffraction
-    'slit_width': 50e-6, # Largeur de la fente d'entrée (m)
-    'pixel_size': 5.2e-6, # Taille d'un pixel du capteur (m)
-    'n_pixels': 4096, # Nombre de pixels du capteur
-    'oversample': 4, # Facteur de suréchantillonnage pour une simulation précise
-    'm_order': 1, # Ordre de diffraction utilisé
-    'desired_peak_counts': 5000, # Comptes désirés au pic pour la simulation de bruit
-}
-# Fonction pour calculer le noyau LSF (Line Spread Function)
-# Théorie : La LSF représente la réponse instrumentale à une ligne spectrale monochromatique.
-# Elle combine l'image de la fente (fonction rectangulaire) et la diffraction due au réseau (fonction sinc).
-# La convolution des deux donne la forme finale de la ligne spectrale sur le capteur.
-def compute_lsf_kernel(x_m, slit_width, f1, f2, N_grooves, d, wavelength):
-    slit_image_width = slit_width * (f2 / f1) # Largeur de l'image de la fente sur le plan focal (grossissement)
-    rect = np.where(np.abs(x_m) <= slit_image_width/2, 1.0, 0.0) # Fonction rectangulaire pour l'image de la fente
-    s = f2 * wavelength / (N_grooves * d) if (N_grooves * d) != 0 else 0.0 # Largeur de la diffraction (résolution du réseau)
-    if s > 1e-12:
-        sinc = np.sinc(x_m / s) # Fonction sinc normalisée pour la diffraction
-    else:
-        sinc = np.zeros_like(x_m); sinc[len(x_m)//2]=1.0 # Cas limite si s est nul
-    lsf = np.convolve(rect, sinc, mode='same') # Convolution : LSF = rect * sinc
-    ssum = lsf.sum()
-    return (lsf/ssum) if ssum>0 else np.zeros_like(lsf) # Normalisation de la LSF
-# Fonction de simulation du spectre (détection basée sur des comptes)
-# Théorie : Cette fonction simule la propagation de la lumière à travers le spectromètre.
-# Pour chaque longueur d'onde, on calcule la position sur le capteur via la loi des réseaux (x = f2 * m * λ / d).
-# La LSF est appliquée pour modéliser le blurring instrumental.
-# Un suréchantillonnage est utilisé pour une convolution précise, puis réduit pour correspondre aux pixels.
-# Du bruit Poisson est ajouté pour simuler une détection photonique réaliste.
-def simulate_spectrum(f1, f2, L_m, lines_per_mm, slit_width,
-                      pixel_size, n_pixels, oversample,
-                      n_lambda, lambdas_m, S_lambda, RGB_lambda,
-                      m_order=1, desired_peak_counts=5000, add_noise=True, seed=None, debug=False):
-    if seed is not None: np.random.seed(seed) # Fixe la graine pour reproductibilité du bruit
-    d = 1.0 / (lines_per_mm * 1e3) # Espacement entre traits du réseau (m)
-    N_grooves = max(1, int(round(L_m / d))) # Nombre de traits illuminés
-    n_pixels_os = n_pixels * oversample # Nombre de pixels suréchantillonnés
-    pixel_size_os = pixel_size / oversample # Taille de pixel suréchantillonnée
-    dl = lambdas_m[1] - lambdas_m[0] if n_lambda>1 else 0.0 # Pas spectral
-    I_os = np.zeros(n_pixels_os) # Intensité suréchantillonnée (noir et blanc)
-    I_rgb_os = np.zeros((n_pixels_os,3)) # Intensité suréchantillonnée (RGB)
-    for i, lam in enumerate(lambdas_m):
-        x_center = f2 * m_order * lam / d - f2 * m_order * np.mean(lambdas_m) / d # Position centrale sur le capteur
-        dx = pixel_size_os # Pas spatial suréchantillonné
-        extent = max(20 * slit_width * f2 / f1, 20 * pixel_size_os) # Étendue pour calculer la LSF
-        n_pts = int(np.ceil(extent / dx)) * 2 + 1 # Nombre de points pour la LSF
-        x_lsf = np.linspace(-extent, extent, n_pts) # Grille pour la LSF
-        lsf = compute_lsf_kernel(x_lsf, slit_width, f1, f2, N_grooves, d, lam) # Calcul de la LSF
-        if lsf.sum() == 0: continue # Si LSF nulle, sauter
-        idx_center = int(round(x_center / dx + n_pixels_os/2)) # Index central sur le capteur
-        start = idx_center - len(lsf)//2; end = start + len(lsf) # Plage d'ajout de la LSF
-        if end > 0 and start < n_pixels_os:
-            k0 = max(0, -start); k1 = min(len(lsf), n_pixels_os - start) # Bornes pour éviter les débordements
-            s0 = max(0, start); s1 = min(n_pixels_os, end)
-            weight = S_lambda[i] * dl # Poids spectral
-            I_os[s0:s1] += lsf[k0:k1] * weight # Ajout à l'intensité NB
-            I_rgb_os[s0:s1] += np.outer(lsf[k0:k1], RGB_lambda[i]) * weight # Ajout à l'intensité RGB
-    I = I_os.reshape(n_pixels, oversample).sum(axis=1) # Réduction du suréchantillonnage (NB)
-    I_rgb = I_rgb_os.reshape(n_pixels, oversample, 3).sum(axis=1) # Réduction du suréchantillonnage (RGB)
-    # Gestion du bruit : utilisation de comptes pour la détection, floats pour le tracé
-    I_counts = None
-    I_plot = I.copy()
-    if add_noise:
-        maxI = float(I.max())
-        if maxI <= 0:
-            I_counts = np.zeros_like(I, dtype=float)
-            I_plot = I.copy()
-        else:
-            scale = max(1.0, desired_peak_counts / maxI) # Échelle pour atteindre les comptes désirés
-            I_mean_counts = I * scale # Intensité moyenne en comptes
-            I_counts = np.random.poisson(np.clip(I_mean_counts, 0, None)).astype(float) # Bruit Poisson
-            I_plot = I_counts / scale # Signal bruité pour le tracé
-            if debug:
-                print(f"[simulate] maxI={maxI:.3e} scale={scale:.3e} peak_counts={I_counts.max():.1f}")
-    else:
-        I_counts = I.copy(); I_plot = I.copy()
-    # Détection des pics sur les comptes
-    if I_counts.max() <= 0:
-        peaks = np.array([], dtype=int)
-    else:
-        prom_counts = max(1.0, 0.01 * I_counts.max()) # Seuil de proéminence pour la détection
-        peaks, _ = find_peaks(I_counts, prominence=prom_counts, distance=10) # Recherche des pics
-    # Dispersion en nm/pixel
-    # Théorie : La dispersion linéaire est donnée par dλ/dx = d / (f2 * m), où d est l'espacement du réseau.
-    dlambda_dx = d / (f2 * m_order) * 1e9 # Dispersion en nm/m
-    dlambda_pixel = dlambda_dx * pixel_size # Dispersion en nm/pixel
-    # Calcul de la FWHM (Full Width at Half Maximum) sur les comptes
-    # Théorie : La FWHM mesure la largeur à mi-hauteur des pics, indiquant la résolution spectrale.
-    fwhms = []
-    for p in peaks:
-        if p < 5 or p > n_pixels - 5: continue # Ignorer les pics trop près des bords
-        half = I_counts[p] / 2.0 # Mi-hauteur
-        i = p-1
-        while i>0 and I_counts[i] > half: i -= 1 # Recherche du bord gauche
-        if i >= p-1: continue
-        denom = I_counts[i+1] - I_counts[i]
-        if denom == 0: continue
-        left = i + (half - I_counts[i]) / denom # Interpolation linéaire gauche
-        i = p+1
-        while i < n_pixels-1 and I_counts[i] > half: i += 1 # Recherche du bord droit
-        if i <= p+1: continue
-        denom = I_counts[i] - I_counts[i-1]
-        if denom == 0: continue
-        right = (i-1) + (half - I_counts[i-1]) / denom # Interpolation linéaire droite
-        fwhm_pix = right - left # Largeur en pixels
-        if fwhm_pix > 0: fwhms.append(fwhm_pix * dlambda_pixel) # Conversion en nm
-    resolution_nm = float(np.mean(fwhms)) if fwhms else np.nan # Résolution moyenne
-    return {
-        'I': I, 'I_plot': I_plot, 'I_counts': I_counts, 'I_rgb': I_rgb,
-        'peaks': peaks, 'resolution_nm': resolution_nm, 'dlambda_pixel': dlambda_pixel,
-        'x_mm': (np.arange(n_pixels) - n_pixels/2) * pixel_size * 1e3 # Positions en mm
-    }
-# Fonction pour sweeper un paramètre
-# Cette fonction varie un paramètre tout en gardant les autres fixes et collecte les résultats de simulation.
-def sweep_one_param(sweep_param, sweep_values, fixed_params=None, debug=False):
-    if fixed_params is None:
-        params = DEFAULTS.copy()
-    else:
-        params = DEFAULTS.copy()
-        params.update(fixed_params)
-    results = []
-    for val in sweep_values:
-        kw = params.copy()
-        if sweep_param == 'lines_per_mm':
-            kw[sweep_param] = int(val) # Conversion en entier pour les traits/mm
-        else:
-            kw[sweep_param] = float(val)
-        start = time.time()
-        res = simulate_spectrum(
-            f1=kw['f1'], f2=kw['f2'], L_m=kw['L_m'], lines_per_mm=kw['lines_per_mm'],
-            slit_width=kw['slit_width'], pixel_size=kw['pixel_size'], n_pixels=kw['n_pixels'],
-            oversample=kw['oversample'], n_lambda=n_lambda, lambdas_m=lambdas_m,
-            S_lambda=S_ideal, RGB_lambda=RGB_lambda, m_order=kw['m_order'],
-            desired_peak_counts=kw['desired_peak_counts'], add_noise=True, seed=0, debug=debug
-        )
-        dt = time.time() - start # Temps de calcul
-        results.append((val, res, dt))
-        if debug:
-            print(f"[sweep] {sweep_param}={val} -> peaks={len(res['peaks'])}, res_nm={res['resolution_nm']}, time={dt:.2f}s")
-    return results
-# Fonction pour plotter les résultats du sweep
-# Trace la résolution et le nombre de pics en fonction du paramètre varié.
-def plot_sweep_results(sweep_param, results, xlabel=None, unit=''):
-    vals = [r[0] for r in results]
-    resvals = [r[1]['resolution_nm'] for r in results]
-    peak_counts = [0 if np.isnan(r[1]['resolution_nm']) else len(r[1]['peaks']) for r in results]
-    plt.figure(figsize=(7,4))
-    plt.plot(vals, resvals, 'o-', label='Résolution (FWHM moyen) [nm]')
-    plt.xlabel(f"{xlabel or sweep_param} [{unit}]")
-    plt.ylabel('Résolution (nm)')
-    plt.grid(True, alpha=0.3)
-    plt.title(f"Variation de {sweep_param}")
-    plt.twinx()
-    plt.plot(vals, peak_counts, 's--', color='gray', label='Nombre de pics')
-    plt.ylabel('Nb pics')
-    plt.legend(loc='upper right')
-    plt.tight_layout()
-    plt.show()
-  
-# Fonction pour plotter un seul spectre (utilisée pour l'interactivité)
-# Génère le profil spectral et une image RGB pour un ensemble de paramètres.
-def plot_single_spectrum(f1, f2, L_m, lines_per_mm, slit_width, desired_peak_counts):
-    f1 = f1 / 1000 # Conversion de mm à m
-    f2 = f2 / 1000 # Conversion de mm à m
-    L_m = L_m / 1000 # Conversion de mm à m
-    slit_width = slit_width / 1000 # Conversion de mm à m (ajuster si en µm)
-    params = {
-        'f1': f1, 'f2': f2, 'L_m': L_m, 'lines_per_mm': lines_per_mm,
-        'slit_width': slit_width, 'pixel_size': DEFAULTS['pixel_size'],
-        'n_pixels': DEFAULTS['n_pixels'], 'oversample': DEFAULTS['oversample'],
-        'm_order': DEFAULTS['m_order'], 'desired_peak_counts': desired_peak_counts
-    }
-    res = simulate_spectrum(**params, n_lambda=n_lambda, lambdas_m=lambdas_m,
-                            S_lambda=S_ideal, RGB_lambda=RGB_lambda,
-                            add_noise=True, seed=0, debug=False)
-  
-    # Tracé du profil spectral
-    x_mm = res['x_mm']
-    plt.figure(figsize=(10, 3))
-    plt.plot(x_mm, res['I_plot'], label='signal bruité (plot)')
-    plt.plot(x_mm, res['I'], alpha=0.6, label='signal idéal (float)')
-    if res['peaks'].size > 0:
-        plt.scatter(x_mm[res['peaks']], res['I_plot'][res['peaks']], color='r', s=12, label='pics détectés')
-    plt.xlabel('Position sur capteur (mm)')
-    plt.ylabel('Intensité (u.a.)')
-    plt.legend()
-    plt.title(f'Profil spectral (résolution: {res["resolution_nm"]:.2f} nm, nb pics: {len(res["peaks"])})')
-    plt.show()
-  
-    # Tracé de l'image RGB
-    img = np.tile(np.clip(res['I_rgb'] / (res['I_rgb'].max() + 1e-12), 0, 1)[np.newaxis, :, :], (120, 1, 1))
-    plt.figure(figsize=(10, 3))
-    plt.imshow(img, extent=[x_mm[0], x_mm[-1], 0, 120], origin='lower', aspect='auto')
-    plt.title('Image RGB spectrale')
-    plt.yticks([])
-    plt.show()
-# Imports pour l'interactivité
-from ipywidgets import interact, FloatSlider, IntSlider, fixed
-import ipywidgets as widgets
-# Partie interactive avec sliders (unités en mm pour l'utilisateur)
-# Permet d'ajuster les paramètres en temps réel et de visualiser le spectre.
-def interactive_spectrum():
-    interact(
-        plot_single_spectrum,
-        f1=FloatSlider(min=50, max=200, step=10, value=DEFAULTS['f1']*1000, description='f1 (mm)'),
-        f2=FloatSlider(min=50, max=200, step=10, value=DEFAULTS['f2']*1000, description='f2 (mm)'),
-        L_m=FloatSlider(min=1, max=20, step=1, value=DEFAULTS['L_m']*1000, description='L_m (mm)'),
-        lines_per_mm=IntSlider(min=300, max=1200, step=100, value=DEFAULTS['lines_per_mm'], description='lines/mm'),
-        slit_width=FloatSlider(min=0.01, max=0.2, step=0.01, value=DEFAULTS['slit_width']*1000, description='slit (mm)'),
-        desired_peak_counts=IntSlider(min=1000, max=10000, step=500, value=DEFAULTS['desired_peak_counts'], description='peak counts')
-    )
-# Fonction interactive pour le sweep
-# Permet de choisir un paramètre à varier et de lancer le sweep.
-from IPython.display import display
-def interactive_sweep():
+
+def rect(x):
+    return np.where(np.abs(x) <= 0.5, 1.0, 0.0)
+
+def U0(x, y=0, a=50e-6):
+    """Champ incident au plan objet : fente de largeur a."""
+    return rect(x / a)
+
+def fourier_transform(func, nu, x_min=-1e-4, x_max=1e-4, N=10000):
     """
-    Interface interactive pour lancer un sweep sur un seul paramètre.
-    Selon le paramètre sélectionné, on affiche des sliders adaptés
-    (valeurs en mm, µm ou entiers pour lines_per_mm).
+    Implémentation numérique de la transformée de Fourier.
+    Calcule ∫ func(x) exp(-i 2π nu x) dx approximativement par somme de Riemann.
+    nu peut être un scalaire ou un tableau numpy.
     """
-    sweep_param_widget = widgets.Dropdown(
-        options=['f1', 'f2', 'L_m', 'lines_per_mm', 'slit_width'],
-        value='f2', description='Param à sweeper:'
+    x = np.linspace(x_min, x_max, N)
+    dx = x[1] - x[0]
+    values = func(x)
+    # nu = np.atleast_1d(nu)  # Assure que nu est un tableau 1D
+    exp_term = np.exp(-1j * 2 * np.pi * nu[:, None] * x[None, :])
+    ft_values = np.sum(values[None, :] * exp_term, axis=1) * dx
+    if len(ft_values) == 1:
+        return ft_values[0]
+    return ft_values
+
+def M(x, Lambda=1e-6, N=100, beta=0.0):
+    """
+    Modélisation du réseau de diffraction blazé (1D en x).
+    M(x) = [comb(x/Λ) ∗ (rect(x/Λ) e^{i β x})] * rect(x / (N Λ))
+    Implémenté comme somme sur k des contributions des rainures.
+    x peut être un scalaire ou un tableau numpy.
+    """
+    m = np.zeros_like(x, dtype=complex)
+    k_min = -int(N // 2)
+    k_max = int(N // 2)
+    for k in range(k_min, k_max + 1):
+        shifted_x = x - k * Lambda
+        rect_val = rect(shifted_x / Lambda)
+        phase = np.exp(1j * beta * shifted_x)
+        m += rect_val * phase
+    overall_rect = rect(x / (N * Lambda))
+    m *= overall_rect
+    if len(m) == 1:
+        return m[0]
+    return m
+
+def U1(x1, y1=0, a=50e-6, lambda_=500e-9, f=0.1, Lambda=1e-6, N=100, beta=0.0):
+    """
+    Champ au centre du corrélateur 4F (plan de Fourier) avec masque M (1D en x).
+    U1(x1) ∝ M(x1) * F{U0}(x1 / (λ f))
+    λ et f sont des valeurs par défaut typiques (500 nm, focale 10 cm).
+    Ajout des paramètres pour le réseau : Λ (pas), N (nombre de périodes), β (paramètre de blaze).
+    """
+    nu = x1 / (lambda_ * f)
+    ft = fourier_transform(lambda x: U0(x, y=0, a=a), nu)
+    m_val = M(x1, Lambda=Lambda, N=N, beta=beta)
+    return m_val * ft
+
+def U2(x2, y2=0, a=50e-6, lambda_=500e-9, f=0.1, Lambda=1e-6, N=100, beta=0.0):
+    """
+    Champ en sortie du corrélateur 4F (1D en x).
+    U2(x2) ∝ F{U1}(x2 / (λ f))
+    λ et f sont des valeurs par défaut typiques (500 nm, focale 10 cm).
+    Ajout des paramètres pour le réseau : Λ (pas), N (nombre de périodes), β (paramètre de blaze).
+    Utilise une plage plus large pour x1 car le plan de Fourier a une échelle différente.
+    """
+    nu = x2 / (lambda_ * f)
+    x1_min = -5e-3  # -5 mm à 5 mm pour capturer la diffusion au plan de Fourier
+    x1_max = 5e-3
+    N_points = 20000  # Plus de points pour une meilleure précision
+    return fourier_transform(
+        lambda x1: U1(x1, y1=0, a=a, lambda_=lambda_, f=f, Lambda=Lambda, N=N, beta=beta),
+        nu,
+        x_min=x1_min,
+        x_max=x1_max,
+        N=N_points
     )
-    dynamic_box = widgets.HBox()
-    out = widgets.Output()
-    def update_dynamic(param):
-        # Widgets adaptés selon le paramètre
-        if param == 'lines_per_mm':
-            min_w = IntSlider(min=100, max=4000, step=50, value=300, description='Min (l/mm)')
-            max_w = IntSlider(min=100, max=4000, step=50, value=1200, description='Max (l/mm)')
-        elif param == 'slit_width':
-            # on propose en µm pour être plus convivial
-            min_w = FloatSlider(min=1, max=300, step=1, value=50, description='Min (µm)')
-            max_w = FloatSlider(min=1, max=300, step=1, value=200, description='Max (µm)')
-        else:
-            # f1, f2, L_m en mm
-            min_w = FloatSlider(min=10, max=500, step=5, value=50, description='Min (mm)')
-            max_w = FloatSlider(min=10, max=500, step=5, value=200, description='Max (mm)')
-        steps = IntSlider(min=3, max=50, step=1, value=5, description='Nb points')
-        run_button = widgets.Button(description='Run sweep', button_style='primary')
-        def run_clicked(b):
-            out.clear_output()
-            with out:
-                param_current = sweep_param_widget.value
-                # Construire les valeurs de sweep en tenant compte des unités
-                if param_current == 'lines_per_mm':
-                    sweep_values = np.linspace(min_w.value, max_w.value, steps.value).astype(int)
-                elif param_current == 'slit_width':
-                    # µm -> m
-                    sweep_values = np.linspace(min_w.value * 1e-6, max_w.value * 1e-6, steps.value)
-                else:
-                    # mm -> m
-                    sweep_values = np.linspace(min_w.value * 1e-3, max_w.value * 1e-3, steps.value)
-                print(f"Lancement sweep pour {param_current} de {min_w.value} à {max_w.value} ({steps.value} points)...")
-                # Lance le sweep en gardant DEFAULTS pour les autres paramètres
-                sweep_res = sweep_one_param(param_current, sweep_values, fixed_params=DEFAULTS, debug=True)
-                unit = 'm' if param_current in ['f1', 'f2', 'L_m', 'slit_width'] else 'l/mm'
-                plot_sweep_results(param_current, sweep_res, xlabel=param_current, unit=unit)
-        run_button.on_click(run_clicked)
-        dynamic_box.children = [min_w, max_w, steps, run_button]
-    def on_param_change(change):
-        update_dynamic(change['new'])
-    sweep_param_widget.observe(on_param_change, names='value')
-    controls = widgets.VBox([sweep_param_widget, dynamic_box])
-    display(controls, out)
-    # déclenche l'affichage initial
-    update_dynamic(sweep_param_widget.value)
-interactive_spectrum()
-interactive_sweep()
+
+
+# Axe x2 dans le plan de sortie
+x2 = np.linspace(-1e-3, 1e-3, 2000)  # 2 mm centré sur l'axe
+
+# Calculer le champ U2
+U2_values = U2(x2, a=50e-6, lambda_=500e-9, f=0.1, Lambda=1e-6, N=100, beta=0.0)
+
+# Tracer l'intensité |U2|^2
+plt.figure(figsize=(8,4))
+plt.plot(x2*1e3, np.abs(U2_values)**2)  # x2 en mm
+plt.xlabel("x2 (mm)")
+plt.ylabel("Intensité |U2|^2")
+plt.title("Champ en sortie du corrélateur 4F")
+plt.grid(True)
+plt.show()
