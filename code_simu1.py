@@ -1,94 +1,103 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+# Fonction rectangulaire
 def rect(x):
     return np.where(np.abs(x) <= 0.5, 1.0, 0.0)
 
-def U0(x, y=0, a=50e-6):
-    """Champ incident au plan objet : fente de largeur a."""
-    return rect(x / a)
+# Fonction U2
+def U2(x2, lambda0, f1, f2, a, d):
+    arg = -f1 / (f2 * a) * (x2 - (lambda0 * f2 / d))
+    return ((lambda0 * f1) / a) * rect(arg)
 
-def fourier_transform(func, nu, x_min=-1e-4, x_max=1e-4, N=10000):
-    """
-    Implémentation numérique de la transformée de Fourier.
-    Calcule ∫ func(x) exp(-i 2π nu x) dx approximativement par somme de Riemann.
-    nu peut être un scalaire ou un tableau numpy.
-    """
-    x = np.linspace(x_min, x_max, N)
-    dx = x[1] - x[0]
-    values = func(x)
-    # nu = np.atleast_1d(nu)  # Assure que nu est un tableau 1D
-    exp_term = np.exp(-1j * 2 * np.pi * nu[:, None] * x[None, :])
-    ft_values = np.sum(values[None, :] * exp_term, axis=1) * dx
-    if len(ft_values) == 1:
-        return ft_values[0]
-    return ft_values
+# Paramètres fixes
+lambda0 = 500e-6  # Longueur d'onde en mm (500 nm)
+f1 = 50  # mm
+a = 0.1  # Largeur de fente en mm
+d = 1/300  # Pas du réseau en mm (300 traits/mm)
 
-def M(x, Lambda=1e-6, N=100, beta=0.0):
-    """
-    Modélisation du réseau de diffraction blazé (1D en x).
-    M(x) = [comb(x/Λ) ∗ (rect(x/Λ) e^{i β x})] * rect(x / (N Λ))
-    Implémenté comme somme sur k des contributions des rainures.
-    x peut être un scalaire ou un tableau numpy.
-    """
-    m = np.zeros_like(x, dtype=complex)
-    k_min = -int(N // 2)
-    k_max = int(N // 2)
-    for k in range(k_min, k_max + 1):
-        shifted_x = x - k * Lambda
-        rect_val = rect(shifted_x / Lambda)
-        phase = np.exp(1j * beta * shifted_x)
-        m += rect_val * phase
-    overall_rect = rect(x / (N * Lambda))
-    m *= overall_rect
-    if len(m) == 1:
-        return m[0]
-    return m
+# Gamme de f2
+f2_values = np.linspace(10, 150, 300)  # f2 de 10 à 150 mm
+fwhm_values = []
 
-def U1(x1, y1=0, a=50e-6, lambda_=500e-9, f=0.1, Lambda=1e-6, N=100, beta=0.0):
-    """
-    Champ au centre du corrélateur 4F (plan de Fourier) avec masque M (1D en x).
-    U1(x1) ∝ M(x1) * F{U0}(x1 / (λ f))
-    λ et f sont des valeurs par défaut typiques (500 nm, focale 10 cm).
-    Ajout des paramètres pour le réseau : Λ (pas), N (nombre de périodes), β (paramètre de blaze).
-    """
-    nu = x1 / (lambda_ * f)
-    ft = fourier_transform(lambda x: U0(x, y=0, a=a), nu)
-    m_val = M(x1, Lambda=Lambda, N=N, beta=beta)
-    return m_val * ft
+# Calcul de la FWHM pour chaque f2
+for f2 in f2_values:
+    # Position du centre de la fonction rectangulaire
+    center = lambda0 * f2 / d
+    
+    # Largeur totale du rectangle (déterminée par la condition |arg| <= 0.5)
+    width = (f2 * a) / f1  # Largeur totale du rectangle en mm
+    
+    # La FWHM d'une fonction rectangulaire est égale à sa largeur totale
+    fwhm = width
+    fwhm_values.append(fwhm)
 
-def U2(x2, y2=0, a=50e-6, lambda_=500e-9, f=0.1, Lambda=1e-6, N=100, beta=0.0):
-    """
-    Champ en sortie du corrélateur 4F (1D en x).
-    U2(x2) ∝ F{U1}(x2 / (λ f))
-    λ et f sont des valeurs par défaut typiques (500 nm, focale 10 cm).
-    Ajout des paramètres pour le réseau : Λ (pas), N (nombre de périodes), β (paramètre de blaze).
-    Utilise une plage plus large pour x1 car le plan de Fourier a une échelle différente.
-    """
-    nu = x2 / (lambda_ * f)
-    x1_min = -5e-3  # -5 mm à 5 mm pour capturer la diffusion au plan de Fourier
-    x1_max = 5e-3
-    N_points = 20000  # Plus de points pour une meilleure précision
-    return fourier_transform(
-        lambda x1: U1(x1, y1=0, a=a, lambda_=lambda_, f=f, Lambda=Lambda, N=N, beta=beta),
-        nu,
-        x_min=x1_min,
-        x_max=x1_max,
-        N=N_points
-    )
-
-
-# Axe x2 dans le plan de sortie
-x2 = np.linspace(-1e-3, 1e-3, 2000)  # 2 mm centré sur l'axe
-
-# Calculer le champ U2
-U2_values = U2(x2, a=50e-6, lambda_=500e-9, f=0.1, Lambda=1e-6, N=100, beta=0.0)
-
-# Tracer l'intensité |U2|^2
-plt.figure(figsize=(8,4))
-plt.plot(x2*1e3, np.abs(U2_values)**2)  # x2 en mm
-plt.xlabel("x2 (mm)")
-plt.ylabel("Intensité |U2|^2")
-plt.title("Champ en sortie du corrélateur 4F")
-plt.grid(True)
+# Tracé du graphique
+plt.figure(figsize=(10, 6))
+plt.plot(f2_values, fwhm_values, 'b-', linewidth=2)
+plt.xlabel('Distance focale f2 (mm)', fontsize=12)
+plt.ylabel('Résolution (mm)', fontsize=12)
+plt.title('Impact de f2 sur la résolution spectrale\n(f1 = 50 mm fixe)', fontsize=14)
+plt.grid(True, alpha=0.3)
+plt.xlim(0, 160)
+plt.tight_layout()
 plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Fonction FWHM de U2
+def fwhm_U2(f1, f2, a):
+    return (f2 * a) / f1
+
+# Paramètres fixes
+a = 0.1  # largeur de fente en mm
+
+# Gammes de f1 et f2 pour la carte
+f1_values = np.linspace(0, 120, 200)
+f2_values = np.linspace(0, 160, 300)
+
+# Création de la grille
+F1, F2 = np.meshgrid(f1_values, f2_values)
+
+# Calcul de la FWHM
+FWHM = fwhm_U2(F1, F2, a)
+
+# Tracé de la carte de chaleur
+plt.figure(figsize=(12, 7))
+im = plt.imshow(FWHM, extent=[f1_values[0], f1_values[-1], f2_values[0], f2_values[-1]],
+                origin='lower', aspect='auto', cmap='viridis')
+plt.colorbar(im, label='FWHM (mm)')
+plt.xlabel('f1 (mm)')
+plt.ylabel('f2 (mm)')
+plt.title('Carte de chaleur 2D : Résolution de U2 en fonction de f1 et f2')
+
+# Points spécifiques à afficher avec annotations f1, f2 et FWHM
+points = [
+    (100, 100), (100, 75), (100, 50), (100, 25), (100, 10),
+    (75, 100), (50, 100), (25, 100), (10, 100), (50, 30), (50,20), (50,10), (10,10), (30,50), (20,50),(10,50), (5,5), (20,20), (30,30),
+    (40,40), (50,50), (60,60), (50,60), (60,50), (70,70), (80,80), (90,90), (80,50), (50,80)
+]
+
+for f1, f2 in points:
+    fwhm_val = fwhm_U2(f1, f2, a)
+    plt.plot(f1, f2, 'ro')  # point rouge
+    # Annotation avec f1, f2 et FWHM
+    plt.text(f1 + 1, f2 + 1, f"({f1},{f2})\n R={fwhm_val:.3f}", 
+             color='white', fontsize=7, weight='bold')
+
+plt.tight_layout()
+plt.show()
+
+
