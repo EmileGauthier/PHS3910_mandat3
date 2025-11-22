@@ -50,26 +50,26 @@ def wavelength_to_rgb(wavelength, gamma=0.8):
 
 plt.rcParams['figure.dpi'] = 150
 
-
-# paramètres à définir, d'autres paramètres peuvent intervenir\n",
+# Paramètres
 lbd = 1e-9 * np.linspace(400,700,1000) # longueur d'onde (m)
 f1 = 50e-3 # focale de la 1ere lentille (m)
 f2 = 30e-3 # focale de la 2e lentille (m)
 L = 10e-6 # taille de l'ouverture (m)
-Lambda = 1e-3 * (1200)**(-1)# pas du réseau (m)
+Lambda = 1e-3 * (1200)**(-1) # pas du réseau (m)
 
-# Position spatiale du premier ordre :
-
+# Positions spatiales du premier ordre en fonction de la longueur d'onde :
 x2 = (lbd*f2/Lambda) * 1
 
+# Calcul des couleurs RGB en fonction de la longueur d'onde
 rgb_colors = np.zeros([1,len(lbd),3])
 for i in range(len(lbd)):
     rgb_colors[0,i,:] = wavelength_to_rgb(1e9*lbd[i])
 
+# Normalisation et aggrandissement de l'image
 rgb_colors = np.repeat(rgb_colors, int(len(lbd)/4), axis=0) / 255
 
+# Affichage de l'image
 extent_values = [0,1e3*(np.max(x2)-np.min(x2)),0,1e3*(np.max(x2)-np.min(x2))/4]
-
 plt.imshow(rgb_colors, extent=extent_values)
 plt.xlabel(r"Position en $x$ (mm)", fontsize = 12)
 plt.ylabel(r"Position en $y$ (mm)", fontsize = 12)
