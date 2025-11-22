@@ -54,8 +54,9 @@ plt.rcParams['figure.dpi'] = 150
 lbd = 1e-9 * np.linspace(400,700,1000) # longueur d'onde (m)
 f1 = 50e-3 # focale de la 1ere lentille (m)
 f2 = 30e-3 # focale de la 2e lentille (m)
-L = 10e-6 # taille de l'ouverture (m)
-Lambda = 1e-3 * (1200)**(-1) # pas du réseau (m)
+L = 100e-6 # taille de l'ouverture (m)
+Lambda = 1e-3 * (600)**(-1) # pas du réseau (m)
+print(Lambda)
 
 # Positions spatiales du premier ordre en fonction de la longueur d'onde :
 x2 = (lbd*f2/Lambda) * 1
