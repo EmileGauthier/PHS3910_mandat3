@@ -33,24 +33,6 @@ def incertitudes_poids(x, y, alpha_x, alpha_y, slope):
 
     return [alpha_m, alpha_c]
 
-def incertitudes(x, y, slope, intercept):
-    # Retourne l'incertitude sur la pente et l'ordonnée à l'origine « à la Ménard »
-
-    N = len(x)
-    moy_x = np.mean(x)
-    alpha_y = np.sqrt(np.sum((y - (slope * x + intercept))**2) / (N - 2))
-    Delta = N * np.sum((x-moy_x)**2)
-
-    alpha_m = alpha_y * np.sqrt(N/Delta)
-    alpha_c = alpha_y * np.sqrt(np.sum(x**2)/Delta)
-
-    return [alpha_m, alpha_c]
-
-# Ajout en quadrature de l'incertitude sur x et y
-
-[alpha_m, alpha_c] = incertitudes(pixel_means, wavelengths, m, c)
-
-
 [alpha_m, alpha_c] = incertitudes_poids(pixel_means, wavelengths, 0.5, uncertainties, m)
 
 
@@ -65,12 +47,5 @@ plt.plot(wavelength_value, wavelength_uncertainty)
 plt.show()
 
 #print(f"Pour le pixel {pixel_value}, la valeur de longueur d'onde assosciée est ({wavelength_value:.2f} ± {wavelength_uncertainty:.2f})nm")
-
-
-
-
-
-
-
 
 
