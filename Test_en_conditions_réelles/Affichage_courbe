@@ -1,0 +1,49 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import cv2
+from scipy.signal import find_peaks
+
+# 1 - Importer image : 
+# Ouverture de l'image
+image2D = plt.imread("C:\\Users\\gauth\\OneDrive\\Documents\\Polytechnique\\Polytechnique automne 2025\\Techniques expérimentales et instrumentation\\Mandat 3\\Test_conditions_réelles\\conditionreel3Dv4.jpeg")
+
+plt.imshow(image2D)
+plt.xlabel(r"Position en $x$ (pixel)", fontsize = 12)
+plt.ylabel(r"Position en $y$ (pixel)", fontsize = 12)
+plt.tight_layout()
+plt.show()
+
+# Conversion de l'image de RGBA à gris 
+image2D = cv2.cvtColor(image2D, cv2.COLOR_RGBA2GRAY)
+plt.imshow(image2D)
+plt.show()
+
+height, width = image2D.shape
+
+# Moyennage par colonne
+x = np.zeros(width)
+for i in range(width):
+    x[i] = np.sum(image2D[:,i])
+
+x = x / np.max(x)
+
+np.savetxt("filtre_condition_réelle.csv", x, delimiter=",")
+
+peaks, properties = find_peaks(x,prominence=0.5,width=5,distance = 10)
+
+fig, ax = plt.subplots()
+plt.plot(x)
+#plt.scatter(peaks, x[peaks], marker="x", label = "Centre de la raie", s=60, color = "C1")
+
+#plt.hlines(y=properties["width_heights"], xmin=properties["left_ips"],
+#           xmax=properties["right_ips"], color = "C1", label = "Largeur de la raie",lw=4)
+
+
+plt.xlabel(r"Position en $x$ sur le détecteur (pixel)", fontsize = 12)
+plt.ylabel("Intensité lumineuse normalisée", fontsize = 12)
+plt.legend(fontsize = 12)
+plt.tight_layout()
+plt.show()
+
+print("peaks :", peaks)
+print("moitié largeur :", properties["widths"]/2)
