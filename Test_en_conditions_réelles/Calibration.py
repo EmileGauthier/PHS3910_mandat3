@@ -76,4 +76,4 @@ wavelength_value2 = m * pixel_value2 + c
 wavelength_uncertainty1 = pixel_value1 * alpha_m
 wavelength_uncertainty2 = pixel_value2 * alpha_m
 
-print(f"La résolution est de {wavelength_value2 - wavelength_value1}, et l'incertitude sur la résolution est de {np.sqrt(wavelength_uncertainty1**2 + wavelength_uncertainty2**2 - wavelength_uncertainty1*wavelength_uncertainty2)}")
+print(f"La résolution est de {wavelength_value2 - wavelength_value1}, et l'incertitude sur la résolution est de {(pixel_value2 - pixel_value1)*alpha_m})}")
