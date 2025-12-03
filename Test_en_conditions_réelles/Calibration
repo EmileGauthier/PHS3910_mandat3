@@ -40,29 +40,40 @@ plt.xlabel(r"Position en $x$ sur le détecteur (pixel)", fontsize = 12)
 plt.ylabel("Longueur d'onde (nm)", fontsize = 12)
 plt.legend(fontsize = 12)
 plt.tight_layout()
-plt.show()
+#plt.show()
 
 
 ### Conversion de pixels (sans unité) à longueur d'onde (nm), avec incertitudes.
+
+# Pour une longueur d'onde
+
+pixel_value = 1300
+
+wavelength_value = m * pixel_value + c
+
+# Ajout en quadrature de l'incertitude sur x et y
+wavelength_uncertainty = np.sqrt((pixel_value * alpha_m)**2 + alpha_c**2)
+
+#print(f"Pour le pixel {pixel_value}, la valeur de longueur d'onde assosciée est ({wavelength_value:.2f} ± {wavelength_uncertainty:.2f})nm")
+
+# Pour calculer la résolution
 
 # 405 -> 39, 24.27325211
 # 555 -> 2240, 25.84706858
 # 571 -> 2581, 51.10744416
 # 650 -> 3976, 64.65646317
 
-pixel_value1 = 2240 - 25.84706858
-pixel_value2 = 2240 + 25.84706858
+pixel_value1 = 39 - 24.27325211
+pixel_value2 = 39 + 24.27325211
 
-pixel_value1 = 723 # Borne inférieure (filtre)
-pixel_value2 = 1524 # Borne supérieure (filtre)
+#pixel_value1 = 723 # Borne inférieure (filtre)
+#pixel_value2 = 1524 # Borne supérieure (filtre)
  
 wavelength_value1 = m * pixel_value1 + c
 wavelength_value2 = m * pixel_value2 + c
 
 # Ajout en quadrature de l'incertitude sur x et y
-wavelength_uncertainty1 = np.sqrt((pixel_value1 * alpha_m)**2 + alpha_c**2)
-wavelength_uncertainty2 = np.sqrt((pixel_value2 * alpha_m)**2 + alpha_c**2)
+wavelength_uncertainty1 = pixel_value1 * alpha_m
+wavelength_uncertainty2 = pixel_value2 * alpha_m
 
-#print(f"La résolution est de {wavelength_value2 - wavelength_value1}, et l'incertitude sur la résolution est de {wavelength_uncertainty1 + wavelength_uncertainty2}")
-print([wavelength_value1,wavelength_uncertainty1])
-print([wavelength_value2,wavelength_uncertainty2])
+print(f"La résolution est de {wavelength_value2 - wavelength_value1}, et l'incertitude sur la résolution est de {np.sqrt(wavelength_uncertainty1**2 + wavelength_uncertainty2**2 - wavelength_uncertainty1*wavelength_uncertainty2)}")
